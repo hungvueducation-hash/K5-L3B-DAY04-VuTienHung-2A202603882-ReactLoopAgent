@@ -33,18 +33,32 @@ Answer (lần 1, rút gọn): "...Dưới đây là thông tin chi tiết về s
 - Sửa gì, ở đâu: thêm đoạn chỉ dẫn cụ thể vào `SYSTEM_PROMPT` trong `agent.py` — nêu rõ 2 giới hạn kỹ thuật của tool (chỉ tìm trong 50 incident gần nhất, không lọc theo năm/khoảng thời gian; không có khả năng mở link ngoài ngoài những gì `get_incident_details` trả, mỗi update bị cắt 900 ký tự) và yêu cầu model phải nêu giới hạn này trước khi trả lời khi câu hỏi vượt khả năng đó.
 - Vì sao chọn thay đổi này: đây là lỗi lặp ở 3 case khác nhau (A5, H1, H6) với cùng gốc — model không biết/biết nhưng không chủ động khai báo giới hạn kỹ thuật thật của tool. Sửa ở system prompt (thay vì validate bằng code như URL ở Bài 4 mẫu) vì đây là vấn đề về *nội dung trả lời phải nói gì*, không phải một điều kiện nhị phân có/không dễ kiểm bằng code như "có URL hay không".
 
-## 4. So sánh hai lần chạy
+Sau vòng cải tiến đầu (chỉ sửa prompt), điểm tổng giảm (83.18 → 78.86) dù case A5 tăng mạnh —
+xem lại để thấy biến động do model không deterministic. Mình làm thêm **vòng cải tiến 2**:
+thêm guardrail bằng code (giống cơ chế `validation_missing_source`) — `validation_error_ignored`:
+nếu answer cuối khẳng định một provider "operational" trong khi tool đã trả lỗi (`ok: false`)
+cho provider đó trong phiên, agent tự phát hiện và yêu cầu model sửa lại trong `max_steps`, không
+cho qua. Nhắm vào case **H7** (hỏi Cloudflare Spectrum khi tool timeout, agent cũ vẫn khẳng định
+operational — vi phạm trực tiếp nguyên tắc "không coi timeout là trạng thái dịch vụ").
 
-| Chỉ số | `eval_before.json` | `eval_after.json` |
-|---|---|---|
-| Điểm tổng | 83.18/100 | 78.86/100 |
-| Điểm case A5 | 55 | **80** |
-| Model calls (case A5) | 3 | 1 |
-| Token/chi phí (case A5) | 4501 tokens / $0.00109 | 522 tokens / $0.00013 |
+Test riêng cho guardrail này ở `tests/test_my_improvements.py` (không sửa file test có sẵn).
 
-- **Lỗi đã giải quyết:** case A5 — agent giờ chủ động nói ngay từ câu đầu: "tôi không thể cung cấp danh sách đầy đủ... vì công cụ của tôi chỉ có khả năng tìm kiếm trong 50 sự cố gần nhất và không có khả năng lọc theo năm" — đúng hành vi mong muốn, tốn ít model call hơn (1 so với 3) vì không cần vòng sửa lại.
-- **Lỗi còn lại:** H1 và H6 (vấn đề "theo liên kết") **không đổi điểm** (vẫn 60) — system prompt chưa đủ mạnh để model tự nhận ra trường hợp "theo link" cụ thể này, có thể cần thêm ví dụ cụ thể hơn trong prompt hoặc một cảnh báo riêng khi `truncated: true`.
-- **Lỗi mới xuất hiện / biến động:** điểm tổng **giảm** (83.18 → 78.86) mặc dù case mục tiêu tăng mạnh. So từng case: nhiều case không liên quan đến thay đổi (A1 giảm 30, H2 giảm 50, E2 giảm 25) cũng thay đổi điểm đáng kể theo cả hai hướng. Kiểm tra case H2 cho thấy nguyên nhân là agent **chọn đường tool-call khác** giữa 2 lần chạy (có lần gọi `get_status` kiểm tra tình trạng hiện tại, có lần không) — đây là do model không deterministic (không cố định temperature/seed), không phải do system prompt gây ra, vì nội dung câu hỏi H2 không liên quan đến phần prompt vừa thêm.
+## 4. So sánh các lần chạy
+
+| Chỉ số | `eval_before.json` (lần 1) | sau khi chỉ sửa prompt | `eval_after.json` (lần 2, có guardrail code) |
+|---|---|---|---|
+| Điểm tổng | 83.18/100 | 78.86/100 | **84.32/100** |
+| Điểm case A5 | 55 | 80 | **100** |
+| Điểm case H7 | 70 | 60 | **75** |
+| Điểm case H2 | 100 | 50 | 100 |
+| Model calls (case A5) | 3 | 1 | 1 |
+| Token/chi phí (case A5) | 4501 tokens / $0.00109 | 522 tokens / $0.00013 | thấp tương đương |
+
+- **Lỗi đã giải quyết:**
+  - A5: agent chủ động nêu giới hạn tool ("chỉ tìm trong 50 incident gần nhất, không lọc theo năm") **và** vẫn trích dữ liệu cụ thể quan sát được — điểm evidence từ 0 lên tối đa.
+  - H7: agent không còn khẳng định "Cloudflare operational" khi tool đã timeout cho Cloudflare — guardrail `validation_error_ignored` đứng sau đảm bảo không lọt qua.
+- **Lỗi còn lại:** H1 và H6 (vấn đề "theo liên kết do incident cung cấp") vẫn giữ nguyên 60 điểm qua cả 2 vòng sửa — nguyên nhân thật: tool `get_incident_details` không có khả năng mở link ngoài, nhưng việc chỉ nhắc trong system prompt chưa đủ để judge hài lòng về độ sâu phân tích nguyên nhân. Cần một cải tiến khác (ví dụ: tool đọc link hoặc một cảnh báo hiển thị rõ hơn trong câu trả lời) — ngoài phạm vi 1 vòng sửa của bài.
+- **Biến động do model không deterministic:** nhiều case không liên quan trực tiếp đến 2 thay đổi trên vẫn lên/xuống vài điểm giữa các lần chạy (ví dụ A3, A4 giảm 20–25 ở vòng 2 dù agent không đổi hành vi cho câu hỏi đó) — xác nhận lại nhận định ở vòng 1: **điểm tổng dao động tự nhiên**, chỉ nên tin vào case có cơ chế nhân-quả rõ ràng (A5, H7), không tin tuyệt đối vào % tổng của 1 lần chạy.
 
 ## 5. Giới hạn
 
@@ -52,3 +66,4 @@ Answer (lần 1, rút gọn): "...Dưới đây là thông tin chi tiết về s
 - **Snapshot cố định** (09/11/2026): không phản ánh tình trạng thật ngoài thực tế tại thời điểm đọc notes này.
 - **Chỉ chạy 1 lần mỗi phiên bản:** như quan sát ở mục 4, bản thân việc chạy lại CÙNG MỘT agent (không đổi gì) với model không deterministic cũng có thể cho điểm tổng khác nhau vài điểm — nên kết luận "cải tiến tốt hơn/xấu hơn" dựa trên 1 lần chạy mỗi bên có độ tin cậy thấp. Bằng chứng đáng tin nhất ở đây là **case A5 cụ thể** (có cơ chế rõ ràng: prompt mới → agent nói đúng câu cần nói), không phải điểm tổng.
 - Thay đổi ở system prompt không giải quyết được H1/H6 — cần một vòng phân tích + cải tiến tiếp theo (ví dụ: thêm cảnh báo cứng khi `truncated: true` trong tool result) để xử lý nhóm lỗi "theo liên kết ngoài" triệt để hơn.
+- Đã thử nâng điểm tổng lên gần 95 bằng 2 vòng cải tiến liên tiếp, đạt 84.32/100 (cao hơn cả lần 1). Không đạt 95 vì: (1) judge/model không deterministic nên luôn có case dao động ±10-25 điểm không liên quan đến thay đổi; (2) model dùng (qua OpenRouter, cấp miễn phí/nhỏ) có giới hạn khả năng suy luận nhân-quả sâu (H1/H6); một model mạnh hơn nhiều khả năng cải thiện các case này hơn là tiếp tục chỉnh prompt.
