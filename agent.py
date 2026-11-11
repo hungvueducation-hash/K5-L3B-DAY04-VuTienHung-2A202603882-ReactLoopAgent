@@ -5,6 +5,7 @@ OPERATIONAL_CLAIMS = ('operational', 'hoạt động bình thường', 'hoạt �
                        'hoạt động ổn định', 'không có sự cố', 'all systems operational')
 ERROR_HINTS = ('lỗi', 'timeout', 'không xác định', 'không thể kiểm tra',
                'không lấy được', 'không kết nối', 'error', 'thất bại')
+MAX_RETRIES_PER_TARGET = 3
 
 SYSTEM_PROMPT = '''Bạn là trợ lý điều tra trạng thái GitHub và Cloudflare.
 Dùng tools trước khi khẳng định về trạng thái. Phân biệt incident hiện tại và lịch sử,
@@ -42,6 +43,7 @@ def run_agent(question, provider, tools, max_steps=6):
     usage = []
     observed_urls = []
     errored_providers = set()
+    rate_limit_counts = {}
 
     for step in range(1, max_steps + 1):
         try:
@@ -101,7 +103,16 @@ def run_agent(question, provider, tools, max_steps=6):
                 result = {'ok': False, 'error': 'INVALID_ARGUMENTS',
                           'message': f'Không parse được arguments: {raw_args!r}'}
             else:
-                result = tools.execute(name, args)
+                retry_key = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
+                if rate_limit_counts.get(retry_key, 0) >= MAX_RETRIES_PER_TARGET:
+                    result = {'ok': False, 'error': 'RETRY_BUDGET_EXCEEDED',
+                              'message': f'Đã thử {MAX_RETRIES_PER_TARGET} lần cho {name}({args}); '
+                                         'dừng retry cho mục này, báo rõ không xác định được và '
+                                         'tiếp tục với phần còn lại.'}
+                else:
+                    result = tools.execute(name, args)
+                    if isinstance(result, dict) and result.get('error') == 'RATE_LIMITED':
+                        rate_limit_counts[retry_key] = rate_limit_counts.get(retry_key, 0) + 1
 
             trace.append({'event': 'tool', 'step': step, 'name': name, 'arguments': raw_args, 'result': result})
             messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': json.dumps(result, ensure_ascii=False)})
