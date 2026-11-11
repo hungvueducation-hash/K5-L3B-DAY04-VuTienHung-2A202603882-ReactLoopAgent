@@ -21,7 +21,16 @@ Khi một tool trả lỗi RATE_LIMITED: thử gọi lại cùng tool/provider �
 không hơn. Nếu một lần thử lại thành công, PHẢI nói rõ trong câu trả lời rằng ban đầu gặp rate
 limit và đã thử lại thành công. Nếu sau 3 lần vẫn rate limit (hoặc nhận RETRY_BUDGET_EXCEEDED),
 dừng gọi lại provider đó ngay, nói rõ không xác định được trạng thái của provider đó do rate
-limit kéo dài, và vẫn tiếp tục trả lời đầy đủ phần dữ liệu của các provider khác đã lấy được.'''
+limit kéo dài, và vẫn tiếp tục trả lời đầy đủ phần dữ liệu của các provider khác đã lấy được.
+Khi câu hỏi yêu cầu đối chiếu/so sánh/xem chi tiết một incident cụ thể (nêu rõ ID, hoặc yêu cầu
+"incident mới nhất" của một dịch vụ để phân tích), chỉ gọi get_*_status là KHÔNG đủ — PHẢI gọi
+thêm get_incident_details cho đúng incident đó trước khi trả lời, vì get_*_status chỉ trả tên
+và trạng thái tóm tắt, không có nội dung/timeline/ảnh hưởng chi tiết.
+Bạn CHỈ có tool cho đúng 5 provider: GitHub, Cloudflare, Vercel, npm, DigitalOcean. Khi câu hỏi
+hỏi về một dịch vụ khác (ví dụ Linear, Slack, AWS...), phải nói THẲNG là không có tool để kiểm
+tra dịch vụ đó, không thể xác nhận trạng thái hay tạo URL incident cho nó — không được diễn đạt
+theo kiểu "không có thông tin cho thấy X đang lỗi" vì câu đó ngụ ý đã kiểm tra được X; tuyệt đối
+không suy ra trạng thái của dịch vụ không có tool từ trạng thái của 5 provider đang hỗ trợ.'''
 
 SCHEMAS = [schema(f'get_{provider}_status', f'Read current {provider} status and recent incidents; component is an optional English substring.',
                   {'component': {'type': 'string', 'description': 'Optional component search, e.g. Actions'}}, [])

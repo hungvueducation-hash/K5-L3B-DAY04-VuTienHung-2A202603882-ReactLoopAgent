@@ -39,5 +39,25 @@ class ErrorGuardrailTests(unittest.TestCase):
         self.assertFalse(any(x['event'] == 'validation_error_ignored' for x in result['trace']))
 
 
+class AlwaysRateLimitedTools:
+    schemas = []
+    def execute(self, name, args):
+        return {'ok': False, 'error': 'RATE_LIMITED', 'http_status': 429, 'retriable': True}
+
+
+class RetryCapTests(unittest.TestCase):
+    def test_blocked_retries_do_not_count_as_tool_events(self):
+        """Model tiếp tục gọi lại cùng tool sau khi ngân sách retry (3) đã hết."""
+        calls = [tool_call(str(i), 'get_vercel_status', '{}') for i in range(1, 5)]
+        calls.append(final('Vercel: không xác định được do rate limit kéo dài.'))
+        fake = FakeProvider(calls)
+        result = run_agent('x', fake, AlwaysRateLimitedTools(), max_steps=8)
+        self.assertEqual(result['status'], 'completed')
+        tool_events = [t for t in result['trace'] if t['event'] == 'tool' and t['name'] == 'get_vercel_status']
+        blocked_events = [t for t in result['trace'] if t['event'] == 'retry_blocked']
+        self.assertEqual(len(tool_events), 3, 'mechanical_checks chỉ nên thấy tối đa 3 lần gọi thật')
+        self.assertEqual(len(blocked_events), 1, 'lần gọi thứ 2 của model bị chặn hoàn toàn (hết ngân sách)')
+
+
 if __name__ == '__main__':
     unittest.main()

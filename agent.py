@@ -102,17 +102,25 @@ def run_agent(question, provider, tools, max_steps=6):
             except (json.JSONDecodeError, ValueError):
                 result = {'ok': False, 'error': 'INVALID_ARGUMENTS',
                           'message': f'Không parse được arguments: {raw_args!r}'}
+                retry_key = None
             else:
                 retry_key = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
                 if rate_limit_counts.get(retry_key, 0) >= MAX_RETRIES_PER_TARGET:
+                    # Chặn trước khi gọi tool thật: KHÔNG phải một lần tool call thật sự,
+                    # nên không ghi event 'tool' (tránh bị mechanical_checks tính nhầm vào
+                    # max_calls của tool gốc).
                     result = {'ok': False, 'error': 'RETRY_BUDGET_EXCEEDED',
                               'message': f'Đã thử {MAX_RETRIES_PER_TARGET} lần cho {name}({args}); '
                                          'dừng retry cho mục này, báo rõ không xác định được và '
                                          'tiếp tục với phần còn lại.'}
-                else:
-                    result = tools.execute(name, args)
-                    if isinstance(result, dict) and result.get('error') == 'RATE_LIMITED':
-                        rate_limit_counts[retry_key] = rate_limit_counts.get(retry_key, 0) + 1
+                    trace.append({'event': 'retry_blocked', 'step': step, 'name': name,
+                                  'arguments': raw_args, 'result': result})
+                    messages.append({'role': 'tool', 'tool_call_id': call_id,
+                                     'content': json.dumps(result, ensure_ascii=False)})
+                    continue
+                result = tools.execute(name, args)
+                if isinstance(result, dict) and result.get('error') == 'RATE_LIMITED':
+                    rate_limit_counts[retry_key] = rate_limit_counts.get(retry_key, 0) + 1
 
             trace.append({'event': 'tool', 'step': step, 'name': name, 'arguments': raw_args, 'result': result})
             messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': json.dumps(result, ensure_ascii=False)})
