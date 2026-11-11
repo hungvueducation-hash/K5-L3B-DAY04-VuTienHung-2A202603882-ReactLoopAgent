@@ -36,10 +36,17 @@ class Provider:
         if not model:
             raise ValueError('Cần đặt MODEL là model có hỗ trợ tool calling.')
         self.name, self.model = name, model
-        key_name, self.url = CONFIG[name]
+        key_name, default_url = CONFIG[name]
         self.key = os.getenv(key_name)
         if not self.key:
             raise ValueError(f'Thiếu {key_name}; xem README.md.')
+        # Cho phép đổi endpoint khi dùng proxy/gateway tương thích OpenAI (ví dụ opencode.ai),
+        # không ảnh hưởng 4 provider mặc định nếu không đặt biến này.
+        base_url = os.getenv('API_ENDPOINT')
+        if base_url and name != 'anthropic':
+            self.url = base_url.rstrip('/') + '/chat/completions'
+        else:
+            self.url = default_url
 
     def complete(self, messages, schemas):
         if self.name == 'anthropic':
